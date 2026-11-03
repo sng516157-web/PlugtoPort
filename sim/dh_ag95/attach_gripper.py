@@ -204,6 +204,34 @@ def add_detachable_joint(root: ET.Element) -> None:
     ET.SubElement(plugin, "output_topic").text = "/plug_weld/state"
 
 
+def add_wrist_camera(root: ET.Element) -> None:
+    """RGB-D camera on the gripper, pointing outwards along the fingers (+z of
+    the base link) with a slight inward tilt — the plug and the fingertips
+    stay in view during grasping. This is the working view for pose
+    estimation (FoundationPose). Topics: /wrist_cam/image, depth_image,
+    camera_info."""
+    ET.SubElement(root, "link", {"name": "wrist_cam_link"})
+    joint = ET.SubElement(root, "joint", {"name": "wrist_cam_joint", "type": "fixed"})
+    ET.SubElement(joint, "origin", {"xyz": "-0.07 0 0.13", "rpy": "0 -0.14 0"})
+    ET.SubElement(joint, "parent", {"link": "gripper_base_link"})
+    ET.SubElement(joint, "child", {"link": "wrist_cam_link"})
+    gazebo = ET.SubElement(root, "gazebo", {"reference": "wrist_cam_link"})
+    sensor = ET.SubElement(gazebo, "sensor", {
+        "name": "wrist_cam", "type": "rgbd_camera",
+    })
+    camera = ET.SubElement(sensor, "camera")
+    ET.SubElement(camera, "horizontal_fov").text = "1.0"
+    image = ET.SubElement(camera, "image")
+    ET.SubElement(image, "width").text = "640"
+    ET.SubElement(image, "height").text = "480"
+    clip = ET.SubElement(camera, "clip")
+    ET.SubElement(clip, "near").text = "0.01"
+    ET.SubElement(clip, "far").text = "3"
+    ET.SubElement(sensor, "always_on").text = "1"
+    ET.SubElement(sensor, "update_rate").text = "10"
+    ET.SubElement(sensor, "topic").text = "/wrist_cam"
+
+
 def ensure_world_link(root: ET.Element) -> None:
     """Guarantee a 'world' root link so the robot can be placed in TF relative
     to the documented gazebo_world frame."""
@@ -347,6 +375,7 @@ def attach(
         add_pad_sensor(root, link_name, topic, patch=False)
 
     add_detachable_joint(root)
+    add_wrist_camera(root)
 
     if ros2_control is not None:
         add_ros2_control(root, ros2_control)

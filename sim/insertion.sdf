@@ -39,7 +39,10 @@
 
     <model name="plug_cam">
       <static>true</static>
-      <pose>0.30 -0.12 0.82 0 0.12 3.1416</pose>
+      <!-- Wider working view of the stand area (pulled back + higher) so a
+           displaced plug on the table stays in frame — this is the initial
+           detection view for perception. -->
+      <pose>0.34 -0.30 1.05 0 0.89 2.16</pose>
       <link name="cam">
         <sensor name="camera" type="camera">
           <camera>
