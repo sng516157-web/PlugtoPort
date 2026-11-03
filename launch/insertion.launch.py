@@ -20,7 +20,7 @@ import subprocess
 import tempfile
 
 import yaml
-from ament_index_python.packages import get_package_share_directory
+from ament_index_python.packages import get_package_share_directory, get_package_prefix
 from launch import LaunchDescription
 from launch.actions import (
     DeclareLaunchArgument,
@@ -57,7 +57,8 @@ def generate_launch_description():
         DeclareLaunchArgument(
             "perception",
             default_value="false",
-            description="camera-derived plug pose instead of the config constant",
+            description="false | classical | foundationpose — camera-derived "
+                        "plug pose instead of the config constant",
         ),
         DeclareLaunchArgument(
             "tcp_pose",
@@ -85,7 +86,7 @@ def setup(context, *_args, **_kwargs):
     gui = LaunchConfiguration("gui").perform(context) == "true"
     rviz = LaunchConfiguration("rviz").perform(context) == "true"
     start_task = LaunchConfiguration("start_task").perform(context) == "true"
-    perception = LaunchConfiguration("perception").perform(context) == "true"
+    perception = LaunchConfiguration("perception").perform(context)
     tcp_pose = LaunchConfiguration("tcp_pose").perform(context)
 
     # --- 2. Generate the combined robot description -------------------------
@@ -192,6 +193,7 @@ def setup(context, *_args, **_kwargs):
                 "@ros_gz_interfaces/msg/Contacts[gz.msgs.Contacts",
                 "/wide_cam@sensor_msgs/msg/Image[gz.msgs.Image",
                 "/plug_cam@sensor_msgs/msg/Image[gz.msgs.Image",
+                "/plug_cam_depth@sensor_msgs/msg/Image[gz.msgs.Image",
                 "/port_cam@sensor_msgs/msg/Image[gz.msgs.Image",
                 "/finger1_pad_contact@ros_gz_interfaces/msg/Contacts[gz.msgs.Contacts",
                 "/finger2_pad_contact@ros_gz_interfaces/msg/Contacts[gz.msgs.Contacts",
@@ -343,13 +345,34 @@ def setup(context, *_args, **_kwargs):
 
     def task_node():
         nodes = []
-        if perception:
+        if perception == "classical":
             nodes.append(
                 Node(
                     package="cable_insertion",
                     executable="perception_node.py",
                     name="plug_perception",
                     parameters=[common],
+                    output="screen",
+                )
+            )
+        elif perception == "foundationpose":
+            # Runs under the foundationpose312 conda python (py3.12 matches
+            # rclpy); ROS env is sourced inside the shell.
+            fp_env = os.path.expanduser(
+                "~/miniconda3/envs/foundationpose312/bin/python")
+            fp_script = os.path.join(
+                get_package_prefix("cable_insertion"),
+                "lib", "cable_insertion", "perception_fp.py")
+            nodes.append(
+                ExecuteProcess(
+                    cmd=[
+                        "bash", "-c",
+                        "set +u; source /opt/ros/jazzy/setup.bash; "
+                        "source $HOME/cable_ws/install/setup.bash; "
+                        "export ROS_LOCALHOST_ONLY=1; "
+                        f"exec {fp_env} {fp_script}",
+                    ],
+                    name="plug_perception_fp",
                     output="screen",
                 )
             )
@@ -367,7 +390,8 @@ def setup(context, *_args, **_kwargs):
                         "robot_description_planning": load_yaml(
                             os.path.join(moveit_dir, "joint_limits.yaml")
                         ),
-                        "use_perception": perception,
+                        "use_perception": perception != "false",
+                        "perception_timeout": 150.0 if perception == "foundationpose" else 10.0,
                     },
                     common,
                 ],

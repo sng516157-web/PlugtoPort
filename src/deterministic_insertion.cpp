@@ -236,7 +236,7 @@ class DeterministicInsertion : public rclcpp::Node {
     perceived_sub_ = create_subscription<geometry_msgs::msg::PoseStamped>(
         "/perception/plug_pose", 10,
         [this](const geometry_msgs::msg::PoseStamped::SharedPtr msg) {
-          perceived_plug_ = msg->pose;
+          perceived_plug_ = *msg;
         });
 
     tf_buffer_ = std::make_unique<tf2_ros::Buffer>(get_clock());
@@ -258,8 +258,19 @@ class DeterministicInsertion : public rclcpp::Node {
     gripper_closed_ = false;
     // The DetachableJoint plugin attaches AT SPAWN by default (its
     // attachRequested member defaults to true). Undo that startup weld before
-    // the arm moves; we re-attach on grasp confirm.
-    weld_detach_pub_->publish(std_msgs::msg::Empty());
+    // the arm moves; we re-attach on grasp confirm. Wait for the bridge to
+    // discover this publisher first — an immediate publish races DDS
+    // discovery and is silently dropped (observed: detach lost, plug welded
+    // the whole run).
+    for (int tries = 0;
+         tries < 50 && weld_detach_pub_->get_subscription_count() == 0;
+         ++tries) {
+      rclcpp::sleep_for(100ms);
+    }
+    for (int k = 0; k < 3; ++k) {
+      weld_detach_pub_->publish(std_msgs::msg::Empty());
+      rclcpp::sleep_for(100ms);
+    }
     RCLCPP_INFO(get_logger(), "Released the plugin's default spawn weld.");
 
     mgi_ = std::make_unique<MoveGroupInterface>(
@@ -287,8 +298,13 @@ class DeterministicInsertion : public rclcpp::Node {
     }
 
     if (use_perception_) {
+      // The classical estimator answers in ~1 s; FoundationPose's first
+      // register needs ~1 min (model load + candidate scoring).
+      const double timeout_s =
+          declare_parameter<double>("perception_timeout", 10.0);
       const auto perc_deadline =
-          std::chrono::steady_clock::now() + std::chrono::seconds(5);
+          std::chrono::steady_clock::now() +
+          std::chrono::milliseconds(static_cast<long>(timeout_s * 1000));
       while (!perceived_plug_.has_value() &&
              std::chrono::steady_clock::now() < perc_deadline) {
         rclcpp::sleep_for(100ms);
@@ -300,14 +316,19 @@ class DeterministicInsertion : public rclcpp::Node {
         // grasp frame and misses the port by ~13 mm. The plug's resting
         // orientation is a known scene constant; FoundationPose-grade pose
         // estimation replaces this later.
+        // Perception publishes in its own frame (classical: gazebo_world,
+        // foundationpose: world/planning) — honor the message's frame_id.
+        geometry_msgs::msg::PoseStamped out;
+        tf_buffer_->transform(p, out, gazebo_frame_, tf2::durationFromSec(1.0));
         RCLCPP_INFO(get_logger(),
                     "Perception override: plug at (%.4f, %.4f) "
                     "(config was %.4f, %.4f; yaw kept from config)",
-                    p.position.x, p.position.y,
+                    out.pose.position.x, out.pose.position.y,
                     plug_pose_.getOrigin().x(), plug_pose_.getOrigin().y());
         plug_pose_ = tf2::Transform(
             plug_pose_.getRotation(),
-            tf2::Vector3(p.position.x, p.position.y, plug_pose_.getOrigin().z()));
+            tf2::Vector3(out.pose.position.x, out.pose.position.y,
+                         plug_pose_.getOrigin().z()));
       } else {
         RCLCPP_WARN(get_logger(),
                     "use_perception is true but no /perception/plug_pose within 5 s; "
@@ -997,7 +1018,7 @@ class DeterministicInsertion : public rclcpp::Node {
   bool gripper_closed_ = false;
   bool attach_plug_ = true;
   bool use_perception_ = false;
-  std::optional<geometry_msgs::msg::Pose> perceived_plug_;
+  std::optional<geometry_msgs::msg::PoseStamped> perceived_plug_;
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr perceived_sub_;
   bool arm_home_ = false;
   State state_ = State::kStart;

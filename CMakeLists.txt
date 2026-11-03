@@ -41,6 +41,7 @@ install(PROGRAMS
   sim/dh_ag95/gripper_move.py
   scripts/pose_bridge.py
   scripts/perception_node.py
+  scripts/perception_fp.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
