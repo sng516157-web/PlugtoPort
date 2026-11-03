@@ -212,7 +212,7 @@ def add_wrist_camera(root: ET.Element) -> None:
     camera_info."""
     ET.SubElement(root, "link", {"name": "wrist_cam_link"})
     joint = ET.SubElement(root, "joint", {"name": "wrist_cam_joint", "type": "fixed"})
-    ET.SubElement(joint, "origin", {"xyz": "0 -0.10 0.15", "rpy": "0 0.1 1.5708"})
+    ET.SubElement(joint, "origin", {"xyz": "0 0 0.145", "rpy": "0 -1.5708 0"})
     ET.SubElement(joint, "parent", {"link": "gripper_base_link"})
     ET.SubElement(joint, "child", {"link": "wrist_cam_link"})
     gazebo = ET.SubElement(root, "gazebo", {"reference": "wrist_cam_link"})

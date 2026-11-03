@@ -84,6 +84,25 @@ Visualization Manager:
       Transport Hint: raw
       Unreliable: false
       Value: true
+    - Class: rviz_default_plugins/Image
+      Enabled: true
+      Max: 255
+      Median window: 5
+      Min: 0
+      Name: WristCam
+      Normalize: false
+      Topic: /wrist_cam/image
+      Transport Hint: raw
+      Unreliable: false
+      Value: true
+    - Class: rviz_default_plugins/Pose
+      Enabled: true
+      Name: PerceivedPlug
+      Topic: /perception/plug_pose
+      Value: true
+      Shape: Axes
+      Axes Length: 0.08
+      Axes Radius: 0.006
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48
