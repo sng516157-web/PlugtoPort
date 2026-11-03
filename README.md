@@ -148,9 +148,18 @@ START -> OPEN_GRIPPER -> HOME -> PRE_GRASP -> GRASP_APPROACH -> CLOSE_GRIPPER
 
 ## Cameras
 
-Three world cameras (wide workspace, plug stand, port) publish gz image topics
-bridged to ROS as `/wide_cam`, `/plug_cam`, `/port_cam` — view them in RViz
-(`-- rviz:=true`). They are the hook points for perception-based grasping.
+Four cameras: three world cameras (wide workspace, plug stand, port) publish
+gz image topics bridged to ROS as `/wide_cam`, `/plug_cam` (+ its depth twin
+`/plug_cam_depth`), `/port_cam`, and a wrist-mounted **RGB-D camera** on the
+gripper (`/wrist_cam/image`, `/wrist_cam/depth_image`, `/wrist_cam/camera_info`)
+with a clear view of the plug in the cage. View them in RViz (`-- rviz:=true`).
+
+These feed the perception pipeline: `perception:=classical` runs classical
+blob detection on plug_cam (position-only override), `perception:=foundationpose`
+runs FoundationPose 6D pose estimation (requires the conda env — see
+`~/perception/install_fp312.sh` on a set-up machine). Both publish
+`/perception/plug_pose`; the task uses it for the plug pose instead of the
+config constant, with the config value as fallback.
 
 ## Frames
 
