@@ -55,6 +55,11 @@ def generate_launch_description():
         DeclareLaunchArgument("rviz", default_value="false"),
         DeclareLaunchArgument("start_task", default_value="true"),
         DeclareLaunchArgument(
+            "perception",
+            default_value="false",
+            description="camera-derived plug pose instead of the config constant",
+        ),
+        DeclareLaunchArgument(
             "tcp_pose",
             default_value="0 0 0.12 0 0 0",
             description="gripper_tcp pose relative to gripper_base_link",
@@ -80,6 +85,7 @@ def setup(context, *_args, **_kwargs):
     gui = LaunchConfiguration("gui").perform(context) == "true"
     rviz = LaunchConfiguration("rviz").perform(context) == "true"
     start_task = LaunchConfiguration("start_task").perform(context) == "true"
+    perception = LaunchConfiguration("perception").perform(context) == "true"
     tcp_pose = LaunchConfiguration("tcp_pose").perform(context)
 
     # --- 2. Generate the combined robot description -------------------------
@@ -336,9 +342,20 @@ def setup(context, *_args, **_kwargs):
         return nodes
 
     def task_node():
+        nodes = []
+        if perception:
+            nodes.append(
+                Node(
+                    package="cable_insertion",
+                    executable="perception_node.py",
+                    name="plug_perception",
+                    parameters=[common],
+                    output="screen",
+                )
+            )
         if not start_task:
-            return []
-        return [
+            return nodes
+        return nodes + [
             Node(
                 package="cable_insertion",
                 executable="deterministic_insertion",
@@ -350,6 +367,7 @@ def setup(context, *_args, **_kwargs):
                         "robot_description_planning": load_yaml(
                             os.path.join(moveit_dir, "joint_limits.yaml")
                         ),
+                        "use_perception": perception,
                     },
                     common,
                 ],

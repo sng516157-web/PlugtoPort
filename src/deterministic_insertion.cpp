@@ -229,6 +229,16 @@ class DeterministicInsertion : public rclcpp::Node {
           }
         });
 
+    // Perception: when enabled, the plug pose comes from the cameras
+    // (/perception/plug_pose, gazebo_world) instead of the config constant;
+    // the config value remains the fallback.
+    use_perception_ = declare_parameter<bool>("use_perception", false);
+    perceived_sub_ = create_subscription<geometry_msgs::msg::PoseStamped>(
+        "/perception/plug_pose", 10,
+        [this](const geometry_msgs::msg::PoseStamped::SharedPtr msg) {
+          perceived_plug_ = msg->pose;
+        });
+
     tf_buffer_ = std::make_unique<tf2_ros::Buffer>(get_clock());
     tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
   }
@@ -274,6 +284,35 @@ class DeterministicInsertion : public rclcpp::Node {
       stale.object.id = "plug";
       stale.object.operation = moveit_msgs::msg::CollisionObject::REMOVE;
       psi_.applyAttachedCollisionObject(stale);
+    }
+
+    if (use_perception_) {
+      const auto perc_deadline =
+          std::chrono::steady_clock::now() + std::chrono::seconds(5);
+      while (!perceived_plug_.has_value() &&
+             std::chrono::steady_clock::now() < perc_deadline) {
+        rclcpp::sleep_for(100ms);
+      }
+      if (perceived_plug_) {
+        const auto& p = *perceived_plug_;
+        // Position only: the blob-axis yaw from v1 perception is unreliable
+        // (measured -1.96 rad vs the true 0), and a wrong yaw rotates the whole
+        // grasp frame and misses the port by ~13 mm. The plug's resting
+        // orientation is a known scene constant; FoundationPose-grade pose
+        // estimation replaces this later.
+        RCLCPP_INFO(get_logger(),
+                    "Perception override: plug at (%.4f, %.4f) "
+                    "(config was %.4f, %.4f; yaw kept from config)",
+                    p.position.x, p.position.y,
+                    plug_pose_.getOrigin().x(), plug_pose_.getOrigin().y());
+        plug_pose_ = tf2::Transform(
+            plug_pose_.getRotation(),
+            tf2::Vector3(p.position.x, p.position.y, plug_pose_.getOrigin().z()));
+      } else {
+        RCLCPP_WARN(get_logger(),
+                    "use_perception is true but no /perception/plug_pose within 5 s; "
+                    "keeping the config pose.");
+      }
     }
 
     computeTaskPoses();
@@ -957,6 +996,9 @@ class DeterministicInsertion : public rclcpp::Node {
   bool contact_seen_ = false;
   bool gripper_closed_ = false;
   bool attach_plug_ = true;
+  bool use_perception_ = false;
+  std::optional<geometry_msgs::msg::Pose> perceived_plug_;
+  rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr perceived_sub_;
   bool arm_home_ = false;
   State state_ = State::kStart;
   std::string last_error_;
