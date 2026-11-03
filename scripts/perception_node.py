@@ -121,6 +121,7 @@ def main_ros():
     import rclpy
     from rclpy.node import Node
     from geometry_msgs.msg import PoseStamped
+    from visualization_msgs.msg import Marker
     from sensor_msgs.msg import Image
 
     class PerceptionNode(Node):
@@ -129,6 +130,10 @@ def main_ros():
             self.declare_parameter("image_topic", "/plug_cam")
             self.declare_parameter("plug_z", PLUG_Z)
             self.pub = self.create_publisher(PoseStamped, "/perception/plug_pose", 10)
+            # RViz marker with a short lifetime: when the plug leaves the view
+            # and publishing stops, the marker expires instead of freezing.
+            self.marker_pub = self.create_publisher(
+                Marker, "/perception/plug_marker", 10)
             self.create_subscription(
                 Image, self.get_parameter("image_topic").value, self.cb, 10)
             self.get_logger().info("plug perception node up (classical v1)")
@@ -149,6 +154,18 @@ def main_ros():
             out.pose.orientation.z = math.sin(yaw / 2)
             out.pose.orientation.w = math.cos(yaw / 2)
             self.pub.publish(out)
+            mk = Marker()
+            mk.header.frame_id = "gazebo_world"
+            mk.header.stamp = out.header.stamp
+            mk.ns = "plug"
+            mk.id = 0
+            mk.type = Marker.ARROW
+            mk.action = Marker.ADD
+            mk.lifetime = rclpy.duration.Duration(seconds=0.8).to_msg()
+            mk.pose = out.pose
+            mk.scale.x, mk.scale.y, mk.scale.z = 0.06, 0.01, 0.01
+            mk.color.a, mk.color.r, mk.color.g, mk.color.b = 1.0, 1.0, 0.55, 0.1
+            self.marker_pub.publish(mk)
 
     rclpy.init()
     rclpy.spin(PerceptionNode())

@@ -237,10 +237,41 @@ class DeterministicInsertion : public rclcpp::Node {
         "/perception/plug_pose", 10,
         [this](const geometry_msgs::msg::PoseStamped::SharedPtr msg) {
           perceived_plug_ = *msg;
+          perceived_plug_stamp_ = now();
         });
 
     tf_buffer_ = std::make_unique<tf2_ros::Buffer>(get_clock());
     tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
+  }
+
+  // Re-read a fresh perceived plug pose mid-run and update the scene target if
+  // it moved, with bounds: nothing under 3 mm (noise), over 20 mm rejected
+  // (mis-detection). Called at GRASP_APPROACH and PORT_ALIGN so a pose that
+  // drifted between acquisition and execution is corrected, not trusted
+  // blindly. Recomputes all downstream task poses.
+  void refreshPlugFromPerception(const char* where) {
+    if (!use_perception_ || !perceived_plug_.has_value()) return;
+    if ((now() - perceived_plug_stamp_).seconds() > 3.0) return;
+    geometry_msgs::msg::PoseStamped out;
+    try {
+      tf_buffer_->transform(*perceived_plug_, out, gazebo_frame_,
+                            tf2::durationFromSec(1.0));
+    } catch (const tf2::TransformException&) {
+      return;
+    }
+    const tf2::Vector3 np(out.pose.position.x, out.pose.position.y,
+                          plug_pose_.getOrigin().z());
+    const tf2::Vector3 delta = np - plug_pose_.getOrigin();
+    if (delta.length() < 0.003) return;
+    if (delta.length() > 0.02) {
+      RCLCPP_WARN(get_logger(), "%s: perception jump of %.3f m rejected",
+                  where, delta.length());
+      return;
+    }
+    plug_pose_ = tf2::Transform(plug_pose_.getRotation(), np);
+    computeTaskPoses();
+    RCLCPP_INFO(get_logger(), "%s: perception moved target by (%.4f, %.4f)",
+                where, delta.x(), delta.y());
   }
 
   int run() {
@@ -373,6 +404,7 @@ class DeterministicInsertion : public rclcpp::Node {
         std::chrono::duration<double>(gripper_settle_)));
 
     enter(State::kGraspApproach);
+    refreshPlugFromPerception("approach");  // re-read; bounded update
     if (!moveCartesian(grasp_tcp_, approach_scaling_))
       return fail(State::kGraspApproach, "Grasp approach failed: " + last_error_);
 
@@ -409,14 +441,42 @@ class DeterministicInsertion : public rclcpp::Node {
       return fail(State::kPreInsert, "PRE_INSERT failed: " + last_error_);
 
     enter(State::kPortAlign);
+    refreshPlugFromPerception("port align");  // late pose correction (bounded)
     if (!moveCartesian(entrance_tcp_, approach_scaling_))
       return fail(State::kPortAlign, "Port alignment failed: " + last_error_);
 
     enter(State::kInsert);
     if (!moveCartesian(inserted_tcp_, insertion_scaling_))
       return fail(State::kInsert, "Insertion failed: " + last_error_);
-    // Free the plug the instant the insert move finishes: a welded plug
-    // fighting the port contact jitters during validation/release. Redundant
+
+    enter(State::kValidateInsertion);
+    if (!validateInsertion()) {
+      // One reactive retry: correct the insert target by the MEASURED tip
+      // error (capped) and push again. Second failure ends the task.
+      auto plug = modelPose("plug");
+      if (!plug) return fail(State::kValidateInsertion, last_error_);
+      tf2::Transform tip_now;
+      tf2::fromMsg(plug->transform, tip_now);
+      tip_now = tip_now * tip_in_plug_;
+      const tf2::Vector3 target_tip =
+          (entrance_world_ * makeT({0, 0, insertion_depth_, 0, 0, 0})).getOrigin();
+      tf2::Vector3 corr = target_tip - tip_now.getOrigin();
+      corr *= 0.8;  // partial correction; avoid overdrive
+      if (corr.length() > 0.012) corr *= 0.012 / corr.length();
+      RCLCPP_WARN(get_logger(),
+                  "Insertion validation failed (%s); reactive retry with correction "
+                  "(%.4f, %.4f, %.4f)", last_error_.c_str(), corr.x(), corr.y(), corr.z());
+      tf2::Transform retry = inserted_tcp_;
+      retry.setOrigin(inserted_tcp_.getOrigin() + corr);
+      if (!moveCartesian(retry, insertion_scaling_))
+        return fail(State::kValidateInsertion,
+                    "reactive insert retry failed: " + last_error_);
+      if (!validateInsertion())
+        return fail(State::kValidateInsertion, last_error_);
+    }
+
+    // Free the plug the instant the (final) insert move finishes: a welded
+    // plug fighting the port contact jitters during release. Redundant
     // publishes in case one is dropped.
     for (int k = 0; k < 3; ++k) {
       weld_detach_pub_->publish(std_msgs::msg::Empty());
@@ -424,10 +484,6 @@ class DeterministicInsertion : public rclcpp::Node {
     }
     welded_by_us_ = false;
     RCLCPP_INFO(get_logger(), "Plug weld released at insert completion.");
-
-    enter(State::kValidateInsertion);
-    if (!validateInsertion())
-      return fail(State::kValidateInsertion, last_error_);
 
     enter(State::kRelease);
     // Detach the weld BEFORE opening: the weld's parent is the finger1 tip
@@ -1019,6 +1075,7 @@ class DeterministicInsertion : public rclcpp::Node {
   bool attach_plug_ = true;
   bool use_perception_ = false;
   std::optional<geometry_msgs::msg::PoseStamped> perceived_plug_;
+  rclcpp::Time perceived_plug_stamp_;
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr perceived_sub_;
   bool arm_home_ = false;
   State state_ = State::kStart;
